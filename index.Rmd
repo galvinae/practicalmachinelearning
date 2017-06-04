@@ -1,0 +1,129 @@
+---
+title: "PML-FinalProject"
+author: "Amy Galvin"
+date: "June 4, 2017"
+output: html_document
+---
+
+## INTRODUCTION
+
+In this project, we look at data from weight lifting exercises (WLE dataset from http://groupware.les.inf.puc-rio.br/har) to determine whether a bicep curl was performed correctly or not.* Specifically, data was collected from accelerometers, gyroscopes, and magnetometers placed on the belt, forearm, arm, and dumbbell of 6 participants. 
+
+*It should be noted that not all of the incorrect movements are necessarily incorrect ways of training the biceps. The biceps brachii muscle is composed of 2 muscles: a long head and a short head (hence the name BI-cep). Performing a bicep curl at different angles or performing "partial" curls are, in fact, practiced exercises to train the different heads of the bicep. That being said, it is still interesting to investigate the differences in the measured data for the different movements and make predictions based on these data.
+
+## DATA CLEANING AND CROSS-VALIDATION
+
+For my analyses and predictions, I first cleaned the data to removed columns that contained only NA values and those that contained near zero variance (NZV). The NZV variables are those that have a unique value across predictors or those that have a constant value across all subjects. In order to avoid them inappropriately skewing the model, they are removed from analyses (though in practice, this should be done with caution, as unneccesarily throwing away data can also inappropriately skew the model). 
+
+```{r, echo = FALSE, results='hide', error = FALSE, warning=FALSE, message= FALSE}
+setwd("C://Users/Amy/Desktop/RCoursera/7-PracticalMachineLearning/FinalProject/GitProj/practicalmachinelearning")
+library(caret)
+library(rpart)
+library(e1071)
+library(rattle)
+library(rpart.plot)
+library(gbm)
+library(randomForest)
+library(parallel)
+library(doParallel)
+```
+
+```{r, echo = TRUE, results = FALSE}
+training <- read.csv("pml-training.csv")
+testing <- read.csv("pml-testing.csv")
+
+training1 <- training
+
+training2 <- which(colSums(is.na(training1)) > 10000)
+training3 <- training1[,-c(training2)]
+training4 <- training3
+
+trainingNZV <- nearZeroVar(training4, saveMetrics=TRUE)
+training5 <- training4[,trainingNZV$nzv == FALSE]
+names <- colnames(training5)
+training5 <- training5[c(-1)]
+```
+
+After cleaning the data, cross-validation was performed in the provided training dataset using random sampling. This dataset was split into a sub-training set, composed of 60% of the original training data, and a sub-test set, composed of 40% of the original training data.  
+
+```{r, echo = TRUE, results='hide'}
+set.seed(23)
+inTrain <- createDataPartition(training5$classe, p=0.6, list = FALSE)
+myTraining <- training5[inTrain,]
+myTest <- training5[-inTrain,]
+```
+
+## MODELING
+
+I tested 3 different models on the sub-training set: 1)Decision Trees, 2)Linear Discriminant Analysis (LDA), and 3) Random Forests. Due to the computational cost of running a generalized (or gradient) boosting model (gbm), it was excluded from this analysis, though it would be another interesting model to investigate. To combate the excessive runtime of random forests, I used the suggestions from PML Mentor Len Greski via https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md . These models were then applied to the sub-test set and the accuracies of the predictions were compared. For ease of analysis, the accuracies were pulled from the confusionMatrix and compared directly.
+
+```{r, echo = TRUE, results ='hide', error=FALSE, warning=FALSE}
+##DECISION TREE
+set.seed(23)
+modFitTree <- train(classe~., method="rpart", data=myTraining)
+predTree <- predict(modFitTree, myTest)
+CMTree <- confusionMatrix(myTest$classe, predTree)
+fancyRpartPlot(modFitTree$finalModel)
+
+##LDA
+set.seed(23)
+modFitLDA <- train(classe~., method="lda", data=myTraining)
+predLDA <- predict(modFitLDA, myTest)
+CMLDA <- confusionMatrix(myTest$classe, predLDA)
+
+##RANDOM FORESTS
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv", number = 5, allowParallel = TRUE)
+
+modFitRF <- train(classe~., method="rf",data=myTraining ,trControl = fitControl)
+
+stopCluster(cluster)
+registerDoSEQ()
+
+predRF <- predict(modFitRF, myTest)
+CMRF <- confusionMatrix(myTest$classe, predRF)
+```
+
+```{r, echo = TRUE}
+Accuracy <- c(CMTree$overall["Accuracy"], CMLDA$overall["Accuracy"], CMRF$overall["Accuracy"])
+Method <- c("Decision Tree", "LDA", "Random Forests")
+
+Acc2 <- data.frame(Method, Accuracy)
+```
+
+When comparing multiple modelings, it may sometimes be useful stack the models and compare the accuracy of the stacked model to the singular models. However, we can see that Random Forests produced an accuracy of 99%. Since the accuracy is so high, I do not think it would be useful to stack the models in hopes of getting higher than 99% accuracy. 
+
+## PREDICTING ON THE FINAL TEST SET
+
+Now that we have chosen the best model for our training set predictions, we will apply this model to the provided test set to predict how each observation was performed. Thus, we will notice that the test set does not contain the "classe" variable.
+
+We will clean the test data in the same way that we did the training data. Therefore, we will take the names of the columns (excluding "classe") from the training data after we have removed the NA and NZV values and extract only those columns from the test data. 
+
+```{r, echo = TRUE}
+names <- colnames(training5)
+testnames <- names[1:57]
+finalTest <- testing[testnames]
+```
+
+Now we will use our Random Forests prediction model to predict the movement type.
+
+```{r, echo = TRUE}
+predict(modFitRF, finalTest)
+```
+
+For the sake of comparison, I ran the LDA and Density Tree models on the final test set as well.
+
+```{r, echo = TRUE}
+predict(modFitLDA, finalTest)
+predict(modFitTree, finalTest)
+```
+
+We can see that the LDA model (85% accuracy) has only two predictions different from the random forests, while the density tree model (~55% accuracy) produced a very different prediction. This goes to show the importance of finding and using the best models for accurate predictions. 
+
+## CONCLUSION
+
+In this project, three different models (density trees, linear discriminant analysis, and random forests) were used to predict the way in which a bicep curl was performed. Being able to make such predictions could be useful in improving devices like FitBit and Nike FuelBand. It was found that using a random forest model resulted in the most accurate predictions of movement type. 
+
+In the future, it would be interesting to explore other avenues of this data that were not investigated in this project. For example, the data features time-stamp variables, indicating that there was some time component of the performed exercises. Since I could not find a description of the variables indicating the organization or unit of time used in the dataset, I did not explore this further. Furthermore, since only 6 participants took part in the study, it might be interesting to break-down the dataset by person and run the models per person to see if we got different results for each person. Finally, it would also be interesting to investigate the difference in accelerometer, gyroscope, and magnetometer measurements to see if one of the devices provides more valuable data than the others. 
+
